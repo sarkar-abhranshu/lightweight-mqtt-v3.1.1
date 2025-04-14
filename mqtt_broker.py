@@ -1,3 +1,20 @@
+"""
+MQTT Broker Implementation
+
+This module implements a simplified MQTT (Message Queuing Telemetry Transport) broker
+that supports basic MQTT operations including connection management, publish/subscribe
+functionality, and QoS levels 0 and 1.
+
+The broker handles:
+- Client connections and disconnections
+- Topic subscriptions 
+- Message publishing and delivery
+- QoS (Quality of Service) levels 0 (at most once) and 1 (at least once)
+- Session persistence for non-clean sessions
+
+This implementation follows a subset of the MQTT 3.1.1 specification.
+"""
+
 import socket
 import threading
 import struct
@@ -10,20 +27,41 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger('MQTT_BROKER')
 
 # MQTT Packet Types
-CONNECT = 1
-CONNACK = 2
-PUBLISH = 3
-PUBACK = 4
-SUBSCRIBE = 8
-SUBACK = 9
-DISCONNECT = 14
+CONNECT = 1     # Client request to connect to server
+CONNACK = 2     # Connect acknowledgment
+PUBLISH = 3     # Publish message
+PUBACK = 4      # Publish acknowledgment
+SUBSCRIBE = 8   # Client subscribe request
+SUBACK = 9      # Subscribe acknowledgment
+DISCONNECT = 14 # Client disconnection request
 
 # QoS Levels
-QOS_0 = 0  # At most once
-QOS_1 = 1  # At least once
+QOS_0 = 0  # At most once delivery (fire and forget)
+QOS_1 = 1  # At least once delivery (acknowledged delivery)
 
 class MQTTBroker:
+    """
+    MQTT Broker implementation that handles client connections and message routing.
+    
+    The broker manages client connections, subscriptions to topics, and message 
+    delivery between publishers and subscribers according to MQTT protocol rules.
+    
+    Attributes:
+        host (str): The host address to bind the broker to
+        port (int): The port to listen on
+        clients (dict): Maps client IDs to their socket connections
+        sessions (dict): Maps client IDs to their session data
+        subscriptions (dict): Maps topics to lists of subscribed client IDs
+        unacknowledged_messages (dict): Tracks messages sent with QoS 1 until acknowledged
+    """
     def __init__(self, host='0.0.0.0', port=1883):
+        """
+        Initialize the MQTT broker.
+        
+        Args:
+            host (str): The host address to bind the broker to. Default is '0.0.0.0' (all interfaces).
+            port (int): The port to listen on. Default is 1883 (standard MQTT port).
+        """
         self.host = host
         self.port = port
         self.server_socket = None
@@ -35,7 +73,16 @@ class MQTTBroker:
         self.unacknowledged_messages = {}  # client_id -> list of (message_id, topic, payload, qos)
         
     def start(self):
-        """Start the MQTT broker server"""
+        """
+        Start the MQTT broker server.
+        
+        Creates a socket, binds it to the specified host and port, and begins
+        accepting client connections. Each client connection is handled in a
+        separate thread.
+        
+        Raises:
+            Exception: Any error during server operation
+        """
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -63,13 +110,26 @@ class MQTTBroker:
             logger.info("MQTT Broker stopped")
     
     def stop(self):
-        """Stop the MQTT broker server"""
+        """
+        Stop the MQTT broker server.
+        
+        Closes the server socket and terminates all active connections.
+        """
         self.running = False
         if self.server_socket:
             self.server_socket.close()
     
     def _disconnect_client(self, client_id):
-        """Disconnect a client due to timeout or explicit disconnect"""
+        """
+        Disconnect a client due to timeout or explicit disconnect request.
+        
+        If the client's session is configured as 'clean_session', all subscriptions
+        and pending messages are removed. Otherwise, the session state is preserved
+        for future reconnection.
+        
+        Args:
+            client_id (str): The ID of the client to disconnect
+        """
         if client_id in self.clients:
             try:
                 self.clients[client_id].close()
@@ -95,7 +155,17 @@ class MQTTBroker:
                         del self.unacknowledged_messages[client_id]
     
     def _handle_client(self, client_socket, client_address):
-        """Handle communication with a connected client"""
+        """
+        Handle communication with a connected client.
+        
+        Reads incoming MQTT packets, processes them according to their type,
+        and generates appropriate responses. This method runs in a separate
+        thread for each connected client.
+        
+        Args:
+            client_socket (socket.socket): The client's socket connection
+            client_address (tuple): The client's address (host, port)
+        """
         client_id = None
         
         try:
@@ -176,7 +246,20 @@ class MQTTBroker:
             logger.info(f"Client {client_address} handler terminated")
     
     def _handle_connect(self, client_socket, payload, client_address):
-        """Handle CONNECT packet"""
+        """
+        Handle CONNECT packet from a client.
+        
+        Processes a connection request, extracts client information,
+        and establishes a session. Sends a CONNACK response.
+        
+        Args:
+            client_socket (socket.socket): The client's socket connection
+            payload (bytes): The packet payload containing connection details
+            client_address (tuple): The client's address (host, port)
+            
+        Returns:
+            str or None: The client ID if connection was successful, None otherwise
+        """
         try:
             # Parse protocol name
             protocol_name_len = struct.unpack("!H", payload[0:2])[0]
@@ -231,7 +314,13 @@ class MQTTBroker:
             return None
     
     def _send_connack(self, client_socket, return_code):
-        """Send CONNACK packet"""
+        """
+        Send CONNACK packet to a client.
+        
+        Args:
+            client_socket (socket.socket): The client's socket connection
+            return_code (int): The connection return code (0 for success)
+        """
         # Fixed header
         fixed_header = bytes([CONNACK << 4, 2])  # 2 bytes in variable header
         
@@ -243,7 +332,17 @@ class MQTTBroker:
         client_socket.send(fixed_header + variable_header)
     
     def _handle_publish(self, client_socket, payload, flags):
-        """Handle PUBLISH packet"""
+        """
+        Handle PUBLISH packet from a client.
+        
+        Extracts published message information and forwards it to subscribers.
+        For QoS 1, sends a PUBACK response.
+        
+        Args:
+            client_socket (socket.socket): The client's socket connection
+            payload (bytes): The packet payload containing topic and message
+            flags (int): Packet flags including QoS level
+        """
         try:
             qos = (flags & 0x06) >> 1
             retain = flags & 0x01
@@ -277,7 +376,17 @@ class MQTTBroker:
             logger.error(f"Error handling PUBLISH: {e}")
     
     def _forward_message(self, topic, message, qos, message_id):
-        """Forward a published message to all subscribers"""
+        """
+        Forward a published message to all subscribers of the topic.
+        
+        For QoS 1 messages, tracks delivery until acknowledgment.
+        
+        Args:
+            topic (str): The topic the message was published to
+            message (bytes): The message payload
+            qos (int): Quality of Service level
+            message_id (int or None): Message identifier for QoS > 0
+        """
         # Find all subscribers for the exact topic
         matching_subscribers = set()
         
@@ -308,7 +417,16 @@ class MQTTBroker:
                     logger.error(f"Error forwarding message to {client_id}: {e}")
     
     def _send_publish(self, client_socket, topic, payload, qos, message_id=None):
-        """Send PUBLISH packet to a client"""
+        """
+        Send PUBLISH packet to a client.
+        
+        Args:
+            client_socket (socket.socket): The client's socket connection
+            topic (str): The topic to publish to
+            payload (bytes): The message payload
+            qos (int): Quality of Service level
+            message_id (int, optional): Message identifier for QoS > 0
+        """
         # Calculate flags
         flags = qos << 1
         
@@ -342,7 +460,13 @@ class MQTTBroker:
         client_socket.send(fixed_header + variable_header + payload)
     
     def _send_puback(self, client_socket, message_id):
-        """Send PUBACK packet"""
+        """
+        Send PUBACK packet to acknowledge message receipt (QoS 1).
+        
+        Args:
+            client_socket (socket.socket): The client's socket connection
+            message_id (int): The message identifier being acknowledged
+        """
         # Fixed header
         fixed_header = bytes([PUBACK << 4, 2])  # 2 bytes in variable header
         
@@ -353,7 +477,15 @@ class MQTTBroker:
         client_socket.send(fixed_header + variable_header)
     
     def _handle_puback(self, payload, client_id):
-        """Handle PUBACK packet"""
+        """
+        Handle PUBACK packet from a client.
+        
+        Removes the acknowledged message from the tracking list of unacknowledged messages.
+        
+        Args:
+            payload (bytes): The packet payload containing the message ID
+            client_id (str): The ID of the client sending the acknowledgment
+        """
         try:
             message_id = struct.unpack("!H", payload[0:2])[0]
             logger.info(f"PUBACK: client_id={client_id}, message_id={message_id}")
@@ -369,7 +501,16 @@ class MQTTBroker:
             logger.error(f"Error handling PUBACK: {e}")
     
     def _handle_subscribe(self, client_socket, payload):
-        """Handle SUBSCRIBE packet"""
+        """
+        Handle SUBSCRIBE packet from a client.
+        
+        Processes subscription requests to one or more topics and
+        sends a SUBACK response.
+        
+        Args:
+            client_socket (socket.socket): The client's socket connection
+            payload (bytes): The packet payload containing topics and QoS
+        """
         try:
             # Parse message ID
             if len(payload) < 2:
@@ -450,7 +591,14 @@ class MQTTBroker:
             logger.error(f"Error handling SUBSCRIBE: {e}")
     
     def _send_suback(self, client_socket, message_id, return_codes):
-        """Send SUBACK packet"""
+        """
+        Send SUBACK packet to confirm subscriptions.
+        
+        Args:
+            client_socket (socket.socket): The client's socket connection
+            message_id (int): The message identifier from the SUBSCRIBE packet
+            return_codes (list): List of QoS levels granted for each subscription
+        """
         try:
             # Fixed header
             remaining_length = 2 + len(return_codes)  # 2 for message ID, 1 for each return code
@@ -483,13 +631,25 @@ class MQTTBroker:
             logger.error(f"Error sending SUBACK: {e}")
     
     def _handle_disconnect(self, client_id):
-        """Handle DISCONNECT packet"""
+        """
+        Handle DISCONNECT packet from a client.
+        
+        Closes the connection gracefully and updates client state.
+        
+        Args:
+            client_id (str): The ID of the client being disconnected
+        """
         logger.info(f"DISCONNECT: client_id={client_id}")
         
         # Disconnect the client
         self._disconnect_client(client_id)
 
 if __name__ == "__main__":
+    """
+    Main entry point to start the MQTT broker when the script is run directly.
+    
+    The broker will listen on all interfaces (0.0.0.0) on the standard MQTT port (1883).
+    """
     host = '0.0.0.0'
     port = 1883
     
