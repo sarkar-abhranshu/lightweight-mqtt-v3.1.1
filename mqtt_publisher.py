@@ -1,3 +1,23 @@
+"""
+MQTT Publisher Implementation
+
+This module implements a lightweight MQTT publisher client that follows the MQTT 3.1.1 protocol.
+It provides functionality to connect to an MQTT broker, publish messages with different QoS levels,
+and handle acknowledgments for QoS 1 messages.
+
+The module also includes sample data generators for simulating sensor data (temperature,
+humidity, and pressure) and a command-line interface for easy testing.
+
+Usage:
+    python publisher.py --topics sensor/temperature:1 sensor/humidity:0 --interval 2.0
+
+Features:
+    - Connect/disconnect to MQTT broker
+    - Publish messages with QoS 0 (at most once) or QoS 1 (at least once)
+    - Handle PUBACK messages for QoS 1 delivery confirmation
+    - Generate sample sensor data
+"""
+
 import socket
 import struct
 import time
@@ -13,17 +33,33 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger('MQTT_PUBLISHER')
 
 # MQTT Packet Types
-CONNECT = 1
-CONNACK = 2
-PUBLISH = 3
-PUBACK = 4
-DISCONNECT = 14
+CONNECT = 1      # Client request to connect to Server
+CONNACK = 2      # Connect acknowledgment
+PUBLISH = 3      # Publish message
+PUBACK = 4       # Publish acknowledgment
+DISCONNECT = 14  # Client is disconnecting
 
 # QoS Levels
-QOS_0 = 0  # At most once
-QOS_1 = 1  # At least once
+QOS_0 = 0  # At most once delivery (fire and forget)
+QOS_1 = 1  # At least once delivery (acknowledged delivery)
 
 class MQTTPublisher:
+    """
+    MQTT Publisher Client Implementation
+    
+    This class implements a simplified MQTT client that can connect to an MQTT broker
+    and publish messages with QoS 0 or QoS 1. It handles the MQTT protocol including
+    connection management, message publishing, and processing acknowledgments.
+    
+    Attributes:
+        broker_host (str): Hostname or IP address of the MQTT broker
+        broker_port (int): Port number of the MQTT broker (default: 1883)
+        client_id (str): Unique identifier for this client
+        connected (bool): Flag indicating connection status
+        message_id (int): Counter for message IDs (used for QoS > 0)
+        keep_alive (int): Keep-alive interval in seconds
+        unacknowledged_messages (dict): Dictionary of messages awaiting acknowledgment
+    """
     def __init__(self, broker_host, broker_port=1883, client_id=None):
         self.broker_host = broker_host
         self.broker_port = broker_port
@@ -37,7 +73,16 @@ class MQTTPublisher:
         self.lock = threading.Lock()
     
     def connect(self):
-        """Connect to the MQTT broker"""
+        """
+        Connect to the MQTT broker
+        
+        Establishes a TCP connection to the broker, sends an MQTT CONNECT packet,
+        and waits for the CONNACK response. If successful, starts a background thread
+        to process incoming messages.
+        
+        Returns:
+            bool: True if connection was successful, False otherwise
+        """
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.broker_host, self.broker_port))
@@ -71,7 +116,12 @@ class MQTTPublisher:
         return False
     
     def disconnect(self):
-        """Disconnect from the MQTT broker"""
+        """
+        Disconnect from the MQTT broker
+        
+        Sends an MQTT DISCONNECT packet, closes the socket connection,
+        and stops the background thread.
+        """
         if self.connected:
             try:
                 # Send DISCONNECT packet
@@ -94,7 +144,20 @@ class MQTTPublisher:
                 self.connected = False
     
     def publish(self, topic, payload, qos=0):
-        """Publish a message to a topic"""
+        """
+        Publish a message to a topic
+        
+        Args:
+            topic (str): The topic to publish to
+            payload (dict, list, str, bytes): The message payload
+            qos (int): Quality of Service level (0 or 1)
+        
+        Returns:
+            bool: True if message was sent successfully, False otherwise
+        
+        Note:
+            For QoS 1, the message is stored in unacknowledged_messages until a PUBACK is received
+        """
         if not self.connected:
             logger.error("Not connected to broker")
             return False
@@ -120,7 +183,12 @@ class MQTTPublisher:
             return False
     
     def _send_connect(self):
-        """Send CONNECT packet"""
+        """
+        Send MQTT CONNECT packet
+        
+        Constructs and sends the CONNECT packet with protocol version, client ID,
+        and other connection parameters.
+        """
         # Protocol name and version
         protocol_name = "MQTT"
         protocol_version = 4  # MQTT 3.1.1
@@ -167,7 +235,15 @@ class MQTTPublisher:
         self.socket.send(fixed_header + variable_header + payload)
     
     def _send_publish(self, topic, payload, qos, message_id=None):
-        """Send PUBLISH packet"""
+        """
+        Send MQTT PUBLISH packet
+        
+        Args:
+            topic (str): The topic to publish to
+            payload (dict, list, str, bytes): The message payload
+            qos (int): Quality of Service level (0 or 1)
+            message_id (int, optional): Message ID for QoS > 0
+        """
         if isinstance(payload, dict) or isinstance(payload, list):
             payload = json.dumps(payload).encode('utf-8')
         elif not isinstance(payload, bytes):
@@ -206,7 +282,12 @@ class MQTTPublisher:
         self.socket.send(fixed_header + variable_header + payload)
     
     def _send_puback(self, message_id):
-        """Send PUBACK packet"""
+        """
+        Send MQTT PUBACK packet
+        
+        Args:
+            message_id (int): The message ID to acknowledge
+        """
         # Fixed header
         fixed_header = bytes([PUBACK << 4, 2])  # 2 bytes in variable header
         
@@ -217,7 +298,11 @@ class MQTTPublisher:
         self.socket.send(fixed_header + variable_header)
     
     def _send_disconnect(self):
-        """Send DISCONNECT packet"""
+        """
+        Send MQTT DISCONNECT packet
+        
+        Constructs and sends a clean disconnect notification to the broker.
+        """
         # Fixed header (no variable header or payload)
         fixed_header = bytes([DISCONNECT << 4, 0])
         
@@ -225,7 +310,15 @@ class MQTTPublisher:
         self.socket.send(fixed_header)
     
     def _read_packet(self):
-        """Read an MQTT packet from the socket"""
+        """
+        Read an MQTT packet from the socket
+        
+        Reads and parses the fixed header to determine packet type and length,
+        then reads the variable header and payload.
+        
+        Returns:
+            tuple: (packet_type, payload) or (None, None) if read failed
+        """
         # Read fixed header
         first_byte = self.socket.recv(1)
         if not first_byte:
@@ -255,7 +348,12 @@ class MQTTPublisher:
         return packet_type, payload
     
     def _receive_loop(self):
-        """Receive and process incoming packets"""
+        """
+        Receive and process incoming packets
+        
+        Background thread that continuously reads packets from the socket,
+        handles acknowledgments (PUBACK), and processes any incoming PUBLISH messages.
+        """
         while self.running and self.connected:
             try:
                 packet_type, payload = self._read_packet()
@@ -305,6 +403,12 @@ class MQTTPublisher:
                 break
 
 def generate_temperature_data():
+    """
+    Generate simulated temperature sensor data
+    
+    Returns:
+        dict: Dictionary containing temperature reading and timestamp
+    """
     data = {
         "temperature": round(random.uniform(20.0, 30.0), 2),
         "timestamp": datetime.now().isoformat()
@@ -312,6 +416,12 @@ def generate_temperature_data():
     return data
 
 def generate_humidity_data():
+    """
+    Generate simulated humidity sensor data
+    
+    Returns:
+        dict: Dictionary containing humidity reading and timestamp
+    """
     data = {
         "humidity": round(random.uniform(30.0, 70.0), 2),
         "timestamp": datetime.now().isoformat()
@@ -319,12 +429,19 @@ def generate_humidity_data():
     return data
 
 def generate_pressure_data():
+    """
+    Generate simulated atmospheric pressure sensor data
+    
+    Returns:
+        dict: Dictionary containing pressure reading and timestamp
+    """
     data = {
         "pressure": round(random.uniform(990.0, 1010.0), 2),
         "timestamp": datetime.now().isoformat()
     }
     return data
 
+# Dictionary mapping topics to their corresponding data generator functions
 DATA_GENERATORS = {
     "sensor/temperature": generate_temperature_data,
     "sensor/humidity": generate_humidity_data,
@@ -332,15 +449,26 @@ DATA_GENERATORS = {
 }
 
 def generate_data_for_topic(topic):
+    """
+    Generate appropriate data for a given topic
+    
+    Args:
+        topic (str): The topic to generate data for
+        
+    Returns:
+        dict: Sensor data appropriate for the specified topic
+    """
     return DATA_GENERATORS[topic]()
 
 if __name__ == "__main__":
+    # Command-line interface for the MQTT publisher
     parser = argparse.ArgumentParser(description='MQTT Publisher')
     parser.add_argument('--topics', nargs='+', default=['sensor/temperature:0', 'sensor/humidity:0', 'sensor/pressure:0'],
     help='Topics to publish to in format topic:qos')
     parser.add_argument('--interval', type=float, default=1.0, help='Publish interval in seconds')
     args = parser.parse_args()
 
+    # Parse topic:qos format into pairs
     topic_qos_pairs = []
     for topic_spec in args.topics:
         parts = topic_spec.split(':', 1)
