@@ -1,3 +1,17 @@
+"""
+MQTT Subscriber Streamlit Application
+
+This application provides a web-based interface for subscribing to MQTT topics and displaying
+received messages. It supports connection to an MQTT broker, topic subscription with different
+QoS levels, message filtering, and persistent message storage.
+
+Features:
+- Connect to any MQTT broker
+- Subscribe to topics with QoS 0 or 1
+- Display received messages in a table format
+- Filter messages by topic
+- Persist messages between app restarts
+"""
 import streamlit as st
 import pandas as pd
 import time
@@ -48,7 +62,16 @@ if 'initialized' not in st.session_state:
     logger.info("Session state initialized")
 
 def on_message(topic, message):
-    """Callback function for when a message is received"""
+    """
+    Callback function executed when an MQTT message is received.
+    
+    This function processes incoming messages, converts them to appropriate string format,
+    adds them to the message queue, and saves them to persistent storage.
+    
+    Args:
+        topic (str): The MQTT topic the message was published on
+        message (any): The message content, could be bytes, dict, or other formats
+    """
     try:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         
@@ -105,7 +128,15 @@ def on_message(topic, message):
         logger.error(f"Error in on_message callback: {e}")
 
 def connect_to_broker():
-    """Connect to the MQTT broker"""
+    """
+    Connect to the MQTT broker using settings from session state.
+    
+    Retrieves connection parameters from Streamlit session state and establishes
+    a connection to the MQTT broker.
+    
+    Returns:
+        bool: True if connection was successful, False otherwise
+    """
     broker_host = st.session_state.broker_host
     broker_port = st.session_state.broker_port
     client_id = st.session_state.client_id
@@ -123,14 +154,23 @@ def connect_to_broker():
         return False
 
 def disconnect_from_broker():
-    """Disconnect from the MQTT broker"""
+    """
+    Disconnect from the MQTT broker.
+    
+    Closes the connection to the broker and updates the session state.
+    """
     if st.session_state.subscriber:
         st.session_state.subscriber.disconnect()
         st.session_state.connected = False
         st.session_state.subscriber = None
 
 def subscribe_to_topic():
-    """Subscribe to a topic"""
+    """
+    Subscribe to an MQTT topic.
+    
+    Retrieves topic and QoS from session state and attempts to subscribe.
+    Displays success/failure message to the user.
+    """
     topic = st.session_state.topic
     qos = st.session_state.qos
     
@@ -151,7 +191,14 @@ def subscribe_to_topic():
         logger.error("Attempted to subscribe while not connected")
 
 def get_local_ip():
-    """Get the local IP address"""
+    """
+    Get the local IP address of the machine.
+    
+    Used to create a unique client ID based on the machine's IP.
+    
+    Returns:
+        str: The local IP address or 127.0.0.1 if it cannot be determined
+    """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
