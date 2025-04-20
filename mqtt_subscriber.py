@@ -19,9 +19,10 @@ import threading
 import random
 import json
 import logging
+import ssl
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime%s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', force=True)
 logger = logging.getLogger('MQTT_SUBSCRIBER')
 
 # MQTT Packet Types
@@ -56,8 +57,10 @@ class MQTTSubscriber:
         running (bool): Flag to control the receive thread
         lock (threading.Lock): Thread synchronization lock
         receive_thread: Thread that handles incoming messages
+        ssl_enabled (bool): Whether SSL/TLS is enabled
+        cafile (str): Path to CA certificate file for SSL/TLS
     """
-    def __init__(self, broker_host, broker_port=1883, client_id=None):
+    def __init__(self, broker_host, broker_port=1883, client_id=None, ssl_enabled=True, cafile='certs/certificate.pem'):
         """
         Initialize the MQTT Subscriber.
         
@@ -65,10 +68,20 @@ class MQTTSubscriber:
             broker_host (str): Hostname or IP address of the MQTT broker
             broker_port (int, optional): Port number of the MQTT broker. Defaults to 1883.
             client_id (str, optional): Unique identifier for this client. If None, a random ID is generated.
+            ssl_enabled (bool, optional): Whether SSL/TLS is enabled. Defaults to True.
+            cafile (str, optional): Path to CA certificate file for SSL/TLS. Defaults to 'certs/certificate.pem'.
         """
         self.broker_host = broker_host
         self.broker_port = broker_port
         self.client_id = client_id or f"subscriber-{random.randint(1000, 9999)}"
+        self.ssl_enabled = ssl_enabled
+        self.cafile = cafile
+        if self.ssl_enabled:
+            self.context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            if self.cafile:
+                self.context.load_verify_locations(cafile=self.cafile)
+            self.context.check_hostname = False
+            self.context.verify_mode = ssl.CERT_REQUIRED
         self.socket = None
         self.connected = False
         self.message_id = 0
@@ -77,6 +90,8 @@ class MQTTSubscriber:
         self.running = False
         self.lock = threading.Lock()
         self.receive_thread = None
+        # Reentrant lock to coordinate reads between subscribe() and receive_loop()
+        self.read_lock = threading.RLock()
 
     def connect(self, clean_session=True):
         """
@@ -90,8 +105,19 @@ class MQTTSubscriber:
             bool: True if connection was successful, False otherwise.
         """
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((self.broker_host, self.broker_port))
+            # Create and connect socket (wrapped for SSL before connecting)
+            if self.ssl_enabled:
+                sock = self.context.wrap_socket(
+                    socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                    server_hostname=self.broker_host
+                )
+                sock.connect((self.broker_host, self.broker_port))
+                self.socket = sock
+            else:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.connect((self.broker_host, self.broker_port))
+                self.socket = sock
+            # Send CONNECT packet
             self._send_connect(clean_session)
             packet_type, payload = self._read_packet()
             if packet_type == CONNACK:
@@ -145,67 +171,25 @@ class MQTTSubscriber:
         Returns:
             bool: True if subscription request was sent successfully, False otherwise.
         """
-        if not self.connected:
-            logger.error("Not connected to broker")
-            return False
-        try:
-            with self.lock:
-                self.message_id = (self.message_id + 1) % 65536
-                message_id = self.message_id
-            logger.info(f"Sending SUBSCRIBE for topic {topic} with QoS {qos}, message_id {message_id}")
-            self._send_subscribe(message_id, [(topic, qos)])
-            self.subscriptions[topic] = callback
-            start_time = time.time()
-            while time.time() - start_time < 5:
-                try:
-                    import select
-                    readable, _, _ = select.select([self.socket], [], [], 0.1)
-                    if not readable:
-                        continue
-                    result = self._read_packet()
-                    if result is None or result[0] is None:
-                        logger.warning("Connection closed while waiting for SUBACK")
-                        return False
-                    if len(result) == 3:
-                        packet_type, payload, _ = result
-                    else:
-                        packet_type, payload = result
-                    logger.debug(f"Received packet type {packet_type} while waiting for SUBACK")
-                    if packet_type == SUBACK:
-                        if len(payload) >= 2:
-                            received_message_id = struct.unpack("!H", payload[0:2])[0]
-                            logger.info(f"Received SUBACK with message_id {received_message_id}, expected {message_id}")
-                            if received_message_id == message_id:
-                                if len(payload) >= 3:
-                                    return_code = payload[2]
-                                    if return_code <= 1:
-                                        logger.info(f"Subscription confirmed for {topic} with QoS {return_code}")
-                                        return True
-                                    else:
-                                        logger.error(f"Subscription failed, return code: {return_code}")
-                                        if topic in self.subscriptions:
-                                            del self.subscriptions[topic]
-                                        return False
-                                else:
-                                    logger.warning("Received malformed SUBACK packet (too short)")
-                            else:
-                                logger.warning(f"Message ID mismatch: expected {message_id}, got {received_message_id}")
-                        else:
-                            logger.warning(f"Received malformed SUBACK packet (length: {len(payload)})")
-                    elif packet_type == PUBLISH:
-                        logger.debug("Received PUBLISH while waiting for SUBACK")
-                    else:
-                        logger.warning(f"Unexpected packet type while waiting for SUBACK: {packet_type}")
-                except Exception as e:
-                    logger.error(f"Error while waiting for SUBACK: {e}")
-                    break
-            logger.warning(f"Timed out waiting for SUBACK for topic {topic}")
-            return True
-        except Exception as e:
-            logger.error(f"Error subscribing to topic: {e}")
-            if topic in self.subscriptions:
-                del self.subscriptions[topic]
-            return False
+        # Ensure exclusive read access during subscribe
+        with self.read_lock:
+            if not self.connected:
+                logger.error("Not connected to broker")
+                return False
+            try:
+                with self.lock:
+                    self.message_id = (self.message_id + 1) % 65536
+                    message_id = self.message_id
+                logger.info(f"Sending SUBSCRIBE for topic {topic} with QoS {qos}, message_id {message_id}")
+                self._send_subscribe(message_id, [(topic, qos)])
+                # Subscription request sent; confirmation will be handled asynchronously
+                self.subscriptions[topic] = callback
+                return True
+            except Exception as e:
+                logger.error(f"Error subscribing to topic: {e}")
+                if topic in self.subscriptions:
+                    del self.subscriptions[topic]
+                return False
 
     def _send_connect(self, clean_session=True):
         """
@@ -399,25 +383,9 @@ class MQTTSubscriber:
                 if not readable:
                     continue
                     
-                # Peek at the first byte to check packet type
-                first_byte = self.socket.recv(1, socket.MSG_PEEK)
-                if not first_byte or len(first_byte) == 0:
-                    logger.warning("Connection closed by broker")
-                    self.connected = False
-                    break
-                    
-                packet_type = (first_byte[0] & 0xF0) >> 4
-                if packet_type == 0:
-                    logger.warning("Detected invalid packet type 0, discarding bytes")
-                    self.socket.recv(1)  # Discard the byte
-                    try:
-                        self.socket.recv(10)  # Try to read and discard more bytes
-                    except:
-                        pass
-                    continue
-                    
-                # Read and process the packet
-                result = self._read_packet()
+                # Read and process the packet under lock
+                with self.read_lock:
+                    result = self._read_packet()
                 if result is None or result[0] is None:
                     logger.warning("Error reading packet, trying to continue")
                     time.sleep(0.1)

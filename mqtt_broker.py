@@ -21,6 +21,7 @@ import struct
 import time
 import json
 import logging
+import ssl
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -54,17 +55,26 @@ class MQTTBroker:
         subscriptions (dict): Maps topics to lists of subscribed client IDs
         unacknowledged_messages (dict): Tracks messages sent with QoS 1 until acknowledged
     """
-    def __init__(self, host='0.0.0.0', port=1883):
+    def __init__(self, host='0.0.0.0', port=1883, ssl_enabled=False, certfile=None, keyfile=None):
         """
         Initialize the MQTT broker.
         
         Args:
             host (str): The host address to bind the broker to. Default is '0.0.0.0' (all interfaces).
             port (int): The port to listen on. Default is 1883 (standard MQTT port).
+            ssl_enabled (bool): Whether SSL/TLS is enabled. Default is False.
+            certfile (str): Path to the SSL certificate file. Required if SSL is enabled.
+            keyfile (str): Path to the SSL private key file. Required if SSL is enabled.
         """
         self.host = host
         self.port = port
         self.server_socket = None
+        self.ssl_enabled = ssl_enabled
+        self.certfile = certfile
+        self.keyfile = keyfile
+        if self.ssl_enabled:
+            self.context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            self.context.load_cert_chain(certfile=self.certfile, keyfile=self.keyfile)
         self.clients = {}  # client_id -> socket
         self.sessions = {}  # client_id -> session data
         self.subscriptions = {}  # topic -> list of client_ids
@@ -84,20 +94,31 @@ class MQTTBroker:
             Exception: Any error during server operation
         """
         try:
-            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.bind((self.host, self.port))
-            self.server_socket.listen(5)
+            raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            raw_sock.bind((self.host, self.port))
+            raw_sock.listen(5)
+            # Use raw listening socket; wrap each client connection
+            self.server_socket = raw_sock
             self.running = True
             
             logger.info(f"MQTT Broker started on {self.host}:{self.port}")
             
             while self.running:
                 client_socket, client_address = self.server_socket.accept()
+                # Wrap per-connection for SSL
+                if self.ssl_enabled:
+                    try:
+                        client_conn = self.context.wrap_socket(client_socket, server_side=True)
+                    except Exception as e:
+                        logger.error(f"SSL handshake failed for {client_address}: {e}")
+                        client_socket.close()
+                        continue
+                else:
+                    client_conn = client_socket
                 logger.info(f"New connection from {client_address}")
-                
-                # Start a new thread to handle this client
-                client_thread = threading.Thread(target=self._handle_client, args=(client_socket, client_address))
+                # Start client handler thread
+                client_thread = threading.Thread(target=self._handle_client, args=(client_conn, client_address))
                 client_thread.daemon = True
                 client_thread.start()
                 
@@ -650,10 +671,12 @@ if __name__ == "__main__":
     
     The broker will listen on all interfaces (0.0.0.0) on the standard MQTT port (1883).
     """
+    # Hardcoded SSL/TLS broker configuration
     host = '0.0.0.0'
     port = 1883
-    
-    broker = MQTTBroker(host, port)
+    certfile = 'certs/certificate.pem'
+    keyfile = 'certs/private_key.pem'
+    broker = MQTTBroker(host, port, ssl_enabled=True, certfile=certfile, keyfile=keyfile)
     try:
         broker.start()
     except KeyboardInterrupt:

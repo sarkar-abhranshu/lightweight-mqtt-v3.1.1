@@ -24,7 +24,7 @@ import queue
 import os
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', force=True)
 logger = logging.getLogger('STREAMLIT_APP')
 
 # Create a message queue for thread-safe communication
@@ -142,8 +142,14 @@ def connect_to_broker():
     client_id = st.session_state.client_id
     clean_session = st.session_state.clean_session
     
-    # Create subscriber
-    subscriber = MQTTSubscriber(broker_host, broker_port, client_id)
+    # Subscriber with hardcoded SSL/TLS
+    subscriber = MQTTSubscriber(
+        broker_host,
+        broker_port,
+        client_id,
+        ssl_enabled=True,
+        cafile='certs/certificate.pem'
+    )
     
     # Connect
     if subscriber.connect(clean_session):
@@ -225,6 +231,10 @@ st.sidebar.text_input("Client ID", client_id, key="client_id")
 
 # Clean session
 st.sidebar.checkbox("Clean Session", value=True, key="clean_session")
+
+# SSL/TLS is hardcoded enabled
+st.session_state.ssl_enabled = True
+st.session_state.cafile = 'certs/certificate.pem'
 
 # Connect/Disconnect button
 if not st.session_state.connected:

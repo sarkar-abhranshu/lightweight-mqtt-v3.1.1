@@ -26,6 +26,7 @@ import random
 import json
 import argparse
 import logging
+import ssl
 from datetime import datetime
 
 # Configure logging
@@ -55,15 +56,25 @@ class MQTTPublisher:
         broker_host (str): Hostname or IP address of the MQTT broker
         broker_port (int): Port number of the MQTT broker (default: 1883)
         client_id (str): Unique identifier for this client
+        ssl_enabled (bool): Flag indicating if SSL/TLS is enabled
+        cafile (str): Path to CA certificate file
         connected (bool): Flag indicating connection status
         message_id (int): Counter for message IDs (used for QoS > 0)
         keep_alive (int): Keep-alive interval in seconds
         unacknowledged_messages (dict): Dictionary of messages awaiting acknowledgment
     """
-    def __init__(self, broker_host, broker_port=1883, client_id=None):
+    def __init__(self, broker_host, broker_port=1883, client_id=None, ssl_enabled=False, cafile=None):
         self.broker_host = broker_host
         self.broker_port = broker_port
         self.client_id = client_id or f"publisher-{random.randint(1000, 9999)}"
+        self.ssl_enabled = ssl_enabled
+        self.cafile = cafile
+        if self.ssl_enabled:
+            self.context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            if self.cafile:
+                self.context.load_verify_locations(cafile=self.cafile)
+            self.context.check_hostname = False
+            self.context.verify_mode = ssl.CERT_REQUIRED
         self.socket = None
         self.connected = False
         self.message_id = 0
@@ -84,8 +95,12 @@ class MQTTPublisher:
             bool: True if connection was successful, False otherwise
         """
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((self.broker_host, self.broker_port))
+            raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            raw.connect((self.broker_host, self.broker_port))
+            if self.ssl_enabled:
+                self.socket = self.context.wrap_socket(raw, server_hostname=self.broker_host)
+            else:
+                self.socket = raw
             
             # Send CONNECT packet
             self._send_connect()
@@ -476,7 +491,13 @@ if __name__ == "__main__":
         qos = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) in [0, 1] else 0
         topic_qos_pairs.append((topic, qos))
     
-    publisher = MQTTPublisher(broker_host='localhost', broker_port=1883)
+    # Publisher with hardcoded SSL/TLS settings
+    publisher = MQTTPublisher(
+        broker_host='localhost',
+        broker_port=1883,
+        ssl_enabled=True,
+        cafile='certs/certificate.pem'
+    )
     
     try:
         if publisher.connect():
