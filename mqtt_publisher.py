@@ -2,11 +2,9 @@
 MQTT Publisher Implementation
 
 This module implements a lightweight MQTT publisher client that follows the MQTT 3.1.1 protocol.
-It provides functionality to connect to an MQTT broker, publish messages with different QoS levels,
-and handle acknowledgments for QoS 1 messages.
+It provides functionality to connect to an MQTT broker, publish messages with different QoS levels, and handle acknowledgments for QoS 1 messages.
 
-The module also includes sample data generators for simulating sensor data (temperature,
-humidity, and pressure) and a command-line interface for easy testing.
+The module also includes sample data generators for simulating sensor data (temperature, humidity, and pressure) and a command-line interface for easy testing.
 
 Usage:
     python publisher.py --topics sensor/temperature:1 sensor/humidity:0 --interval 2.0
@@ -87,9 +85,7 @@ class MQTTPublisher:
         """
         Connect to the MQTT broker
         
-        Establishes a TCP connection to the broker, sends an MQTT CONNECT packet,
-        and waits for the CONNACK response. If successful, starts a background thread
-        to process incoming messages.
+        Establishes a TCP connection to the broker, sends an MQTT CONNECT packet, and waits for the CONNACK response. If successful, starts a background thread to process incoming messages.
         
         Returns:
             bool: True if connection was successful, False otherwise
@@ -328,8 +324,7 @@ class MQTTPublisher:
         """
         Read an MQTT packet from the socket
         
-        Reads and parses the fixed header to determine packet type and length,
-        then reads the variable header and payload.
+        Reads and parses the fixed header to determine packet type and length, then reads the variable header and payload.
         
         Returns:
             tuple: (packet_type, payload) or (None, None) if read failed
@@ -366,8 +361,7 @@ class MQTTPublisher:
         """
         Receive and process incoming packets
         
-        Background thread that continuously reads packets from the socket,
-        handles acknowledgments (PUBACK), and processes any incoming PUBLISH messages.
+        Background thread that continuously reads packets from the socket, handles acknowledgments (PUBACK), and processes any incoming PUBLISH messages.
         """
         while self.running and self.connected:
             try:
@@ -498,7 +492,7 @@ if __name__ == "__main__":
         ssl_enabled=True,
         cafile='certs/certificate.pem'
     )
-    
+
     try:
         if publisher.connect():
             print(f"Publishing to {len(topic_qos_pairs)} topics every {args.interval} seconds:")

@@ -9,8 +9,6 @@ The implementation handles:
 - Topic subscription with QoS 0 and 1
 - Message reception and callback execution
 - MQTT packet parsing and creation
-
-This is intended for educational purposes and demonstrates the MQTT protocol details.
 """
 import socket
 import struct
@@ -96,6 +94,10 @@ class MQTTSubscriber:
     def connect(self, clean_session=True):
         """
         Connect to the MQTT broker.
+
+        Opens a SSL-wrapped TCP socket connection to broker.
+        
+        Sends a CONNECT packet, waits for CONNACK and starts background thread for incoming messages if successful.
         
         Args:
             clean_session (bool, optional): Whether to start a clean session. Defaults to True.
@@ -161,6 +163,8 @@ class MQTTSubscriber:
     def subscribe(self, topic, qos=0, callback=None):
         """
         Subscribe to an MQTT topic.
+
+        Acquires a lock, increments the message ID, sends a SUBSCRIBE packet for the topic, and registers the callback for incoming messages.
         
         Args:
             topic (str): The topic to subscribe to. May contain wildcards (+ and #).
@@ -487,8 +491,6 @@ class MQTTSubscriber:
     def _topic_matches(self, subscription_topic, published_topic):
         """
         Check if a subscription topic matches a published topic considering MQTT wildcards.
-        
-        MQTT uses '+' to match a single level and '#' to match multiple levels.
         
         Args:
             subscription_topic (str): The topic filter with possible wildcards

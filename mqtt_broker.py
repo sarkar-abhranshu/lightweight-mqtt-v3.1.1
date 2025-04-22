@@ -1,9 +1,7 @@
 """
 MQTT Broker Implementation
 
-This module implements a simplified MQTT (Message Queuing Telemetry Transport) broker
-that supports basic MQTT operations including connection management, publish/subscribe
-functionality, and QoS levels 0 and 1.
+This module implements a simplified MQTT (Message Queuing Telemetry Transport) broker that supports basic MQTT operations including connection management, publish/subscribe functionality, and QoS levels 0 and 1.
 
 The broker handles:
 - Client connections and disconnections
@@ -28,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger('MQTT_BROKER')
 
 # MQTT Packet Types
-CONNECT = 1     # Client request to connect to server
+CONNECT = 1     # Client request to connect to broker
 CONNACK = 2     # Connect acknowledgment
 PUBLISH = 3     # Publish message
 PUBACK = 4      # Publish acknowledgment
@@ -44,20 +42,11 @@ class MQTTBroker:
     """
     MQTT Broker implementation that handles client connections and message routing.
     
-    The broker manages client connections, subscriptions to topics, and message 
-    delivery between publishers and subscribers according to MQTT protocol rules.
-    
-    Attributes:
-        host (str): The host address to bind the broker to
-        port (int): The port to listen on
-        clients (dict): Maps client IDs to their socket connections
-        sessions (dict): Maps client IDs to their session data
-        subscriptions (dict): Maps topics to lists of subscribed client IDs
-        unacknowledged_messages (dict): Tracks messages sent with QoS 1 until acknowledged
+    The broker manages client connections, subscriptions to topics, and message delivery between publishers and subscribers according to MQTT protocol rules.
     """
     def __init__(self, host='0.0.0.0', port=1883, ssl_enabled=False, certfile=None, keyfile=None):
         """
-        Initialize the MQTT broker.
+        Initialize the MQTT broker with host, port, SSL options, and dictionaries to track clients, session data, subscriptions, and unacknowledged messages.
         
         Args:
             host (str): The host address to bind the broker to. Default is '0.0.0.0' (all interfaces).
@@ -86,9 +75,7 @@ class MQTTBroker:
         """
         Start the MQTT broker server.
         
-        Creates a socket, binds it to the specified host and port, and begins
-        accepting client connections. Each client connection is handled in a
-        separate thread.
+        Creates a socket, binds it to the specified host and port, and begins accepting client connections. For each client, it wraps the socket in SSL if SSL is enabled and logs the connection. Each client connection is handled in a separate thread (to avoid race conditions).
         
         Raises:
             Exception: Any error during server operation
@@ -144,9 +131,9 @@ class MQTTBroker:
         """
         Disconnect a client due to timeout or explicit disconnect request.
         
-        If the client's session is configured as 'clean_session', all subscriptions
-        and pending messages are removed. Otherwise, the session state is preserved
-        for future reconnection.
+        Closes and removes the client socket.
+        
+        If the client's session is configured as 'clean_session', all subscriptions, session data and unacknowledged messages are removed. Otherwise, the session state is preserved for future reconnection.
         
         Args:
             client_id (str): The ID of the client to disconnect
@@ -179,9 +166,7 @@ class MQTTBroker:
         """
         Handle communication with a connected client.
         
-        Reads incoming MQTT packets, processes them according to their type,
-        and generates appropriate responses. This method runs in a separate
-        thread for each connected client.
+        Reads incoming MQTT packets, processes them according to their type, and generates appropriate responses. This method runs in a separate thread for each connected client. On disconnect or error, ensures resources are cleaned up.
         
         Args:
             client_socket (socket.socket): The client's socket connection
@@ -270,8 +255,7 @@ class MQTTBroker:
         """
         Handle CONNECT packet from a client.
         
-        Processes a connection request, extracts client information,
-        and establishes a session. Sends a CONNACK response.
+        Processes a connection request, extracts client information, and establishes a session. Sends a CONNACK response.
         
         Args:
             client_socket (socket.socket): The client's socket connection
@@ -336,7 +320,7 @@ class MQTTBroker:
     
     def _send_connack(self, client_socket, return_code):
         """
-        Send CONNACK packet to a client.
+        Send CONNACK packet to a client, indicating connection acceptance or refusal.
         
         Args:
             client_socket (socket.socket): The client's socket connection

@@ -1,8 +1,7 @@
 """
 MQTT Subscriber Streamlit Application
 
-This application provides a web-based interface for subscribing to MQTT topics and displaying
-received messages. It supports connection to an MQTT broker, topic subscription with different
+This application provides a web-based interface for subscribing to MQTT topics and displaying received messages. It supports connection to an MQTT broker, topic subscription with different
 QoS levels, message filtering, and persistent message storage.
 
 Features:
@@ -65,8 +64,7 @@ def on_message(topic, message):
     """
     Callback function executed when an MQTT message is received.
     
-    This function processes incoming messages, converts them to appropriate string format,
-    adds them to the message queue, and saves them to persistent storage.
+    This function processes incoming messages, converts them to appropriate string format, adds them to the message queue, and saves them to persistent storage.
     
     Args:
         topic (str): The MQTT topic the message was published on
@@ -131,8 +129,7 @@ def connect_to_broker():
     """
     Connect to the MQTT broker using settings from session state.
     
-    Retrieves connection parameters from Streamlit session state and establishes
-    a connection to the MQTT broker.
+    Retrieves connection parameters from Streamlit session state and establishes a connection to the MQTT broker.
     
     Returns:
         bool: True if connection was successful, False otherwise
@@ -221,8 +218,10 @@ st.write("This app allows you to subscribe to MQTT topics and view messages publ
 # Sidebar for connection settings
 st.sidebar.header("Connection Settings")
 
+default_host = get_local_ip()
+
 # Broker host and port
-st.sidebar.text_input("Broker Host", "localhost", key="broker_host")
+st.sidebar.text_input("Broker Host", default_host, key="broker_host")
 st.sidebar.number_input("Broker Port", min_value=1, max_value=65535, value=1883, key="broker_port")
 
 # Client ID
@@ -242,6 +241,7 @@ if not st.session_state.connected:
         with st.spinner("Connecting to broker..."):
             if connect_to_broker():
                 st.sidebar.success("Connected to broker")
+                st.experimental_rerun()
             else:
                 st.sidebar.error("Failed to connect to broker")
 else:
